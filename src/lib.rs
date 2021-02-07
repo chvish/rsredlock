@@ -1,3 +1,5 @@
+use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
 use redis;
 
 const RELEASE_SCRIPT: &str = r#"if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end"#;
@@ -7,7 +9,7 @@ pub struct RedisLock {
     key: String,
     value: String,
     ttl: usize,
-    acquired: bool
+    acquired: bool,
 }
 
 impl RedisLock {
@@ -25,24 +27,26 @@ impl RedisLock {
     pub fn acquire(&mut self) -> Result<(), redis::RedisError> {
         let cmd = redis::Cmd::pset_ex(&self.key, &self.value, self.ttl);
         match self.client.get_connection() {
-            Ok(mut conn) => cmd.query(&mut conn).map(
-                |_x: ()| {
-                    self.acquired = true;
-                    ()
-                }
-            ),
+            Ok(mut conn) => cmd.query(&mut conn).map(|_x: ()| {
+                self.acquired = true;
+                ()
+            }),
             Err(err) => Err(err),
         }
     }
 
     fn gen_rand() -> String {
-        "foo".to_string()
+        thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(30)
+            .map(char::from)
+            .collect()
     }
 
     pub fn release(&mut self) -> Result<(), redis::RedisError> {
         match self.acquired {
             true => self.do_release(),
-            false => Ok(())
+            false => Ok(()),
         }
     }
 
@@ -50,12 +54,10 @@ impl RedisLock {
         let script = redis::Script::new(RELEASE_SCRIPT);
         script.arg(&self.key).arg(&self.value);
         match self.client.get_connection() {
-            Ok(mut conn) => script.invoke(&mut conn).map(
-                |_x: ()| {
-                    self.acquired = false;
-                    ()
-                }
-            ),
+            Ok(mut conn) => script.invoke(&mut conn).map(|_x: ()| {
+                self.acquired = false;
+                ()
+            }),
             Err(err) => Err(err),
         }
     }
@@ -66,8 +68,6 @@ impl Drop for RedisLock {
         let _ = self.release();
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {
